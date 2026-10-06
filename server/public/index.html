@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auto Clicker - Monitor</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --txt:#1d2129; --sub:#65676b; --ok:#1a7f37; --alerta:#cf222e; --aviso:#9a6700; --borda:#d8dee4; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1117; --card:#161b22; --txt:#e6edf3; --sub:#8b949e; --ok:#3fb950; --alerta:#f85149; --aviso:#d29922; --borda:#30363d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; font-family:system-ui, sans-serif; background:var(--bg); color:var(--txt); }
+  main { max-width:640px; margin:0 auto; display:grid; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--borda); border-radius:10px; padding:14px; }
+  h1 { font-size:1.2rem; margin:0; }
+  .linha { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input { flex:1; min-width:0; padding:8px; border-radius:6px; border:1px solid var(--borda); background:var(--bg); color:var(--txt); }
+  button { padding:8px 12px; border-radius:6px; border:1px solid var(--borda); background:var(--bg); color:var(--txt); cursor:pointer; }
+  .status { font-size:1.05rem; font-weight:600; }
+  .ok { color:var(--ok); } .alerta { color:var(--alerta); } .aviso { color:var(--aviso); } .sub { color:var(--sub); font-size:.85rem; }
+  #banner { display:none; background:var(--alerta); color:#fff; border-radius:10px; padding:16px; font-weight:700; text-align:center; }
+  ul { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
+  li { border-left:3px solid var(--borda); padding:4px 8px; }
+  li.anomalia, li.offline { border-color:var(--alerta); } li.retomado, li.iniciado, li.online { border-color:var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Auto Clicker - Monitor</h1>
+
+  <div class="card linha">
+    <input id="token" type="password" placeholder="Token" autocomplete="off">
+    <button id="conectar">Conectar</button>
+  </div>
+
+  <div id="banner"><span id="bannerTexto"></span><br><button id="ok">OK</button></div>
+
+  <div class="card">
+    <div id="conexao" class="status aviso">Desconectado</div>
+    <div id="clicker" class="sub">Clicker: desconhecido</div>
+    <div class="linha" style="margin-top:10px">
+      <button id="permitir">Permitir notificações</button>
+      <button id="teste">Enviar evento de teste</button>
+    </div>
+    <div id="notifInfo" class="sub" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <strong>Eventos</strong>
+    <ul id="eventos" style="margin-top:8px"></ul>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const ALERTAS = new Set(["anomalia", "offline", "teste"]);
+let fonte = null;
+let alarme = null;
+
+function salvar(k, v) { try { localStorage.setItem(k, v); } catch {} }
+function ler(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } }
+
+$("token").value = ler("token");
+
+function infoNotificacoes() {
+  if (!("Notification" in window)) return $("notifInfo").textContent = "Este navegador não suporta notificações.";
+  if (!window.isSecureContext) return $("notifInfo").textContent = "Notificações exigem HTTPS (ou localhost).";
+  $("notifInfo").textContent = "Permissão de notificação: " + Notification.permission;
+}
+infoNotificacoes();
+
+$("permitir").onclick = async () => {
+  if ("Notification" in window) await Notification.requestPermission();
+  tocar(0.2); // desbloqueia o áudio do navegador com um gesto do usuário
+  infoNotificacoes();
+};
+
+let ctx = null;
+function tocar(duracao = 0.4) {
+  try {
+    ctx = ctx || new AudioContext();
+    const osc = ctx.createOscillator(), ganho = ctx.createGain();
+    osc.frequency.value = 880; ganho.gain.value = 0.2;
+    osc.connect(ganho).connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + duracao);
+  } catch {}
+}
+
+const TITULOS = { anomalia: "ANOMALIA DETECTADA, clicker pausado", offline: "CLICKER OFFLINE", teste: "Teste de alerta" };
+
+function alertar(ev) {
+  $("bannerTexto").textContent = TITULOS[ev.tipo] || ev.tipo;
+  $("banner").style.display = "block";
+  if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+  clearInterval(alarme);
+  tocar(); alarme = setInterval(tocar, 1500);
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification("Auto Clicker", { body: ev.mensagem || ev.tipo, tag: "clicker", requireInteraction: true });
+  }
+}
+
+$("ok").onclick = () => { clearInterval(alarme); $("banner").style.display = "none"; };
+
+function adicionar(ev) {
+  const li = document.createElement("li");
+  li.className = ev.tipo;
+  const hora = new Date(ev.data).toLocaleTimeString();
+  li.innerHTML = `<strong></strong> <span class="sub"></span><div></div>`;
+  li.querySelector("strong").textContent = ev.tipo;
+  li.querySelector("span").textContent = hora;
+  li.querySelector("div").textContent = ev.mensagem || "";
+  $("eventos").prepend(li);
+}
+
+function mostrarClicker(s) {
+  const el = $("clicker");
+  if (!s.online) { el.textContent = "Clicker: offline"; el.className = "sub alerta"; return; }
+  el.textContent = "Clicker: online, " + (s.clicando ? "clicando" : "pausado");
+  el.className = "sub " + (s.clicando ? "ok" : "aviso");
+}
+
+function conectar() {
+  const token = $("token").value.trim();
+  if (!token) return;
+  salvar("token", token);
+  if (fonte) fonte.close();
+  $("eventos").innerHTML = "";
+  fonte = new EventSource(`/api/eventos/stream?token=${encodeURIComponent(token)}`);
+
+  fonte.onopen = () => { $("conexao").textContent = "Conectado"; $("conexao").className = "status ok"; };
+  fonte.onerror = () => { $("conexao").textContent = "Reconectando..."; $("conexao").className = "status aviso"; };
+
+  fonte.addEventListener("status", (e) => mostrarClicker(JSON.parse(e.data)));
+  for (const tipo of ["iniciado", "anomalia", "pausado", "retomado", "encerrado", "heartbeat", "online", "offline", "teste"]) {
+    fonte.addEventListener(tipo, (e) => {
+      const ev = JSON.parse(e.data);
+      mostrarClicker({ online: !["offline", "encerrado"].includes(tipo), clicando: ev.clicando });
+      if (tipo === "heartbeat") return;
+      adicionar(ev);
+      // Só alerta eventos novos, não o histórico reenviado na conexão
+      if (ALERTAS.has(tipo) && !ev.replay) alertar(ev);
+    });
+  }
+}
+
+$("conectar").onclick = conectar;
+if ($("token").value) conectar();
+
+$("teste").onclick = async () => {
+  const r = await fetch("/api/eventos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + $("token").value.trim() },
+    body: JSON.stringify({ tipo: "teste", mensagem: "Evento de teste enviado pelo navegador" }),
+  });
+  if (!r.ok) $("notifInfo").textContent = "Falha ao enviar teste: HTTP " + r.status;
+};
+</script>
+</body>
+</html>
