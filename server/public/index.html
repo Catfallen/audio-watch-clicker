@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Auto Clicker - Monitor</title>
+<title>Audio Watch Clicker</title>
 <style>
-  :root { --bg:#f4f5f7; --card:#fff; --txt:#1d2129; --sub:#65676b; --ok:#1a7f37; --alerta:#cf222e; --aviso:#9a6700; --borda:#d8dee4; }
+  :root { --bg:#f4f5f7; --card:#fff; --txt:#1d2129; --sub:#65676b; --ok:#1a7f37; --alerta:#cf222e; --aviso:#9a6700; --borda:#d8dee4; --acento:#0969da; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#0d1117; --card:#161b22; --txt:#e6edf3; --sub:#8b949e; --ok:#3fb950; --alerta:#f85149; --aviso:#d29922; --borda:#30363d; }
+    :root { --bg:#0d1117; --card:#161b22; --txt:#e6edf3; --sub:#8b949e; --ok:#3fb950; --alerta:#f85149; --aviso:#d29922; --borda:#30363d; --acento:#4493f8; }
   }
   * { box-sizing: border-box; }
   body { margin:0; padding:16px; font-family:system-ui, sans-serif; background:var(--bg); color:var(--txt); }
@@ -15,68 +15,269 @@
   .card { background:var(--card); border:1px solid var(--borda); border-radius:10px; padding:14px; }
   h1 { font-size:1.2rem; margin:0; }
   .linha { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  input { flex:1; min-width:0; padding:8px; border-radius:6px; border:1px solid var(--borda); background:var(--bg); color:var(--txt); }
-  button { padding:8px 12px; border-radius:6px; border:1px solid var(--borda); background:var(--bg); color:var(--txt); cursor:pointer; }
-  .status { font-size:1.05rem; font-weight:600; }
+  .entre { justify-content:space-between; }
+  form { display:grid; gap:8px; }
+  input { width:100%; padding:9px; border-radius:6px; border:1px solid var(--borda); background:var(--bg); color:var(--txt); font-size:1rem; }
+  button { padding:8px 12px; border-radius:6px; border:1px solid var(--borda); background:var(--bg); color:var(--txt); cursor:pointer; font-size:.95rem; }
+  button.primario { background:var(--acento); border-color:var(--acento); color:#fff; }
+  .link { background:none; border:none; color:var(--acento); padding:0; }
+  .status { font-weight:600; }
   .ok { color:var(--ok); } .alerta { color:var(--alerta); } .aviso { color:var(--aviso); } .sub { color:var(--sub); font-size:.85rem; }
+  .erro { color:var(--alerta); font-size:.9rem; min-height:1.2em; }
   #banner { display:none; background:var(--alerta); color:#fff; border-radius:10px; padding:16px; font-weight:700; text-align:center; }
+  #banner button { margin-top:8px; }
   ul { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
   li { border-left:3px solid var(--borda); padding:4px 8px; }
   li.anomalia, li.offline { border-color:var(--alerta); } li.retomado, li.iniciado, li.online { border-color:var(--ok); }
+  [hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Auto Clicker - Monitor</h1>
+  <h1>Audio Watch Clicker</h1>
 
-  <div class="card linha">
-    <input id="token" type="password" placeholder="Token" autocomplete="off">
-    <button id="conectar">Conectar</button>
-  </div>
+  <!-- Tela de login / cadastro -->
+  <section id="telaLogin" class="card" hidden>
+    <form id="formLogin">
+      <strong id="tituloForm">Entrar</strong>
+      <input id="email" type="email" placeholder="E-mail" autocomplete="username" required>
+      <input id="senha" type="password" placeholder="Senha (mín. 8 caracteres)" autocomplete="current-password" minlength="8" required>
+      <button class="primario" type="submit" id="botaoForm">Entrar</button>
+      <div class="erro" id="erroLogin"></div>
+      <button class="link" type="button" id="alternarForm">Não tem conta? Cadastre-se</button>
+    </form>
+  </section>
 
-  <div id="banner"><span id="bannerTexto"></span><br><button id="ok">OK</button></div>
+  <!-- Painel -->
+  <section id="telaPainel" hidden>
+    <div style="display:grid; gap:12px">
+      <div class="card linha entre">
+        <div>
+          <div id="conexao" class="status aviso">Conectando...</div>
+          <div class="sub" id="usuarioEmail"></div>
+        </div>
+        <button id="sair">Sair</button>
+      </div>
 
-  <div class="card">
-    <div id="conexao" class="status aviso">Desconectado</div>
-    <div id="clicker" class="sub">Clicker: desconhecido</div>
-    <div class="linha" style="margin-top:10px">
-      <button id="permitir">Permitir notificações</button>
-      <button id="teste">Enviar evento de teste</button>
+      <div id="banner"><span id="bannerTexto"></span><div class="sub" style="color:#fff" id="bannerDetalhe"></div><button id="ok">OK</button></div>
+
+      <div class="card">
+        <strong>Clickers</strong>
+        <ul id="clickers" style="margin-top:8px"><li class="sub">Nenhum clicker conectado ainda.</li></ul>
+      </div>
+
+      <div class="card">
+        <div class="linha">
+          <button id="permitir">Permitir notificações</button>
+          <button id="teste">Enviar evento de teste</button>
+        </div>
+        <div id="notifInfo" class="sub" style="margin-top:6px"></div>
+      </div>
+
+      <div class="card">
+        <strong>Eventos</strong>
+        <ul id="eventos" style="margin-top:8px"></ul>
+      </div>
     </div>
-    <div id="notifInfo" class="sub" style="margin-top:6px"></div>
-  </div>
-
-  <div class="card">
-    <strong>Eventos</strong>
-    <ul id="eventos" style="margin-top:8px"></ul>
-  </div>
+  </section>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const ALERTAS = new Set(["anomalia", "offline", "teste"]);
-let fonte = null;
-let alarme = null;
+const TITULOS = { anomalia: "ANOMALIA DETECTADA, clicker pausado", offline: "CLICKER OFFLINE", teste: "Teste de alerta" };
 
-function salvar(k, v) { try { localStorage.setItem(k, v); } catch {} }
-function ler(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } }
+// ------------------------------------------------------------ sessão
+let accessToken = null;
+let renovando = null;
+let modoCadastro = false;
+let streamAbort = null;
 
-$("token").value = ler("token");
+function ler(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function salvar(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
 
-function infoNotificacoes() {
-  if (!("Notification" in window)) return $("notifInfo").textContent = "Este navegador não suporta notificações.";
-  if (!window.isSecureContext) return $("notifInfo").textContent = "Notificações exigem HTTPS (ou localhost).";
-  $("notifInfo").textContent = "Permissão de notificação: " + Notification.permission;
+function guardarTokens(t) {
+  accessToken = t.accessToken;
+  salvar("refreshToken", t.refreshToken);
+  salvar("email", t.usuario.email);
 }
-infoNotificacoes();
 
-$("permitir").onclick = async () => {
-  if ("Notification" in window) await Notification.requestPermission();
-  tocar(0.2); // desbloqueia o áudio do navegador com um gesto do usuário
-  infoNotificacoes();
+/** Renova o access token. Várias chamadas simultâneas compartilham a mesma renovação. */
+function renovar() {
+  renovando ??= (async () => {
+    const refreshToken = ler("refreshToken");
+    if (!refreshToken) throw new Error("sem sessão");
+    const r = await fetch("/api/auth/refresh", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!r.ok) { salvar("refreshToken", null); throw new Error("sessão expirada"); }
+    guardarTokens(await r.json());
+  })().finally(() => { renovando = null; });
+  return renovando;
+}
+
+/** fetch autenticado: renova o token e tenta de novo uma vez se receber 401. */
+async function api(url, opcoes = {}) {
+  if (!accessToken) await renovar();
+  const chamar = () => fetch(url, { ...opcoes, headers: { ...opcoes.headers, Authorization: "Bearer " + accessToken } });
+  let r = await chamar();
+  if (r.status === 401) { await renovar(); r = await chamar(); }
+  return r;
+}
+
+// ------------------------------------------------------------ login / cadastro
+$("alternarForm").onclick = () => {
+  modoCadastro = !modoCadastro;
+  $("tituloForm").textContent = $("botaoForm").textContent = modoCadastro ? "Criar conta" : "Entrar";
+  $("alternarForm").textContent = modoCadastro ? "Já tem conta? Entrar" : "Não tem conta? Cadastre-se";
+  $("senha").autocomplete = modoCadastro ? "new-password" : "current-password";
+  $("erroLogin").textContent = "";
 };
 
+$("formLogin").onsubmit = async (e) => {
+  e.preventDefault();
+  $("erroLogin").textContent = "";
+  const r = await fetch(modoCadastro ? "/api/auth/registrar" : "/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: $("email").value, senha: $("senha").value, dispositivo: "web: " + navigator.userAgent.slice(0, 80) }),
+  });
+  const corpo = await r.json().catch(() => ({}));
+  if (!r.ok) return $("erroLogin").textContent = corpo.erro || "Falha: HTTP " + r.status;
+  $("senha").value = "";
+  guardarTokens(corpo);
+  abrirPainel();
+};
+
+$("sair").onclick = async () => {
+  const refreshToken = ler("refreshToken");
+  if (streamAbort) streamAbort.abort();
+  fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken }) });
+  accessToken = null;
+  salvar("refreshToken", null);
+  pararAlarme();
+  mostrarLogin();
+};
+
+function mostrarLogin() {
+  $("telaPainel").hidden = true;
+  $("telaLogin").hidden = false;
+  $("email").value = ler("email") || "";
+}
+
+function abrirPainel() {
+  $("telaLogin").hidden = true;
+  $("telaPainel").hidden = false;
+  $("usuarioEmail").textContent = ler("email") || "";
+  $("eventos").innerHTML = "";
+  infoNotificacoes();
+  conectarStream();
+}
+
+// ------------------------------------------------------------ SSE via fetch (permite header Authorization)
+async function conectarStream() {
+  if (streamAbort) streamAbort.abort();
+  const controle = new AbortController();
+  streamAbort = controle;
+  let ultimoId = null;
+
+  while (!controle.signal.aborted) {
+    try {
+      const headers = ultimoId ? { "Last-Event-ID": ultimoId } : {};
+      const r = await api("/api/eventos/stream", { headers, signal: controle.signal });
+      if (r.status === 401) throw Object.assign(new Error("sessão"), { sessao: true });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      marcarConexao("Conectado", "ok");
+
+      const leitor = r.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await leitor.read();
+        if (done) break;
+        buffer += value;
+        let fim;
+        while ((fim = buffer.indexOf("\n\n")) >= 0) {
+          const bloco = buffer.slice(0, fim);
+          buffer = buffer.slice(fim + 2);
+          const msg = { event: "message", data: "" };
+          for (const linha of bloco.split("\n")) {
+            if (linha.startsWith(":")) continue;
+            const i = linha.indexOf(":");
+            const campo = i < 0 ? linha : linha.slice(0, i);
+            const valor = i < 0 ? "" : linha.slice(i + 1).replace(/^ /, "");
+            if (campo === "id") ultimoId = valor;
+            else if (campo === "event") msg.event = valor;
+            else if (campo === "data") msg.data += valor;
+          }
+          if (msg.data) tratar(msg.event, JSON.parse(msg.data));
+        }
+      }
+    } catch (erro) {
+      if (controle.signal.aborted) return;
+      if (erro.sessao || erro.message === "sessão expirada" || erro.message === "sem sessão") return mostrarLogin();
+    }
+    marcarConexao("Reconectando...", "aviso");
+    await new Promise((ok) => setTimeout(ok, 3000));
+  }
+}
+
+function marcarConexao(texto, classe) {
+  $("conexao").textContent = texto;
+  $("conexao").className = "status " + classe;
+}
+
+// ------------------------------------------------------------ eventos
+const clickers = new Map();
+
+function tratar(tipo, ev) {
+  if (tipo === "status") {
+    clickers.clear();
+    for (const c of ev.clickers) clickers.set(c.cliente, c);
+    return desenharClickers();
+  }
+  if (ev.cliente && tipo !== "teste") {
+    const c = clickers.get(ev.cliente) || { cliente: ev.cliente };
+    c.online = !["offline", "encerrado"].includes(tipo);
+    if (typeof ev.clicando === "boolean") c.clicando = ev.clicando;
+    clickers.set(ev.cliente, c);
+    desenharClickers();
+  }
+  if (tipo === "heartbeat") return;
+  adicionar(tipo, ev);
+  if (ALERTAS.has(tipo) && !ev.replay) alertar(tipo, ev);
+}
+
+function desenharClickers() {
+  const ul = $("clickers");
+  ul.innerHTML = "";
+  if (!clickers.size) return ul.innerHTML = '<li class="sub">Nenhum clicker conectado ainda.</li>';
+  for (const c of clickers.values()) {
+    const li = document.createElement("li");
+    const estado = !c.online ? ["offline", "alerta"] : c.clicando ? ["clicando", "ok"] : ["pausado", "aviso"];
+    li.className = c.online ? (c.clicando ? "online" : "") : "offline";
+    li.innerHTML = "<strong></strong> <span></span>";
+    li.querySelector("strong").textContent = c.cliente;
+    li.querySelector("span").textContent = estado[0];
+    li.querySelector("span").className = estado[1];
+    ul.append(li);
+  }
+}
+
+function adicionar(tipo, ev) {
+  const li = document.createElement("li");
+  li.className = tipo;
+  li.innerHTML = "<strong></strong> <span class='sub'></span><div></div>";
+  li.querySelector("strong").textContent = tipo;
+  li.querySelector("span").textContent = new Date(ev.data).toLocaleTimeString() + (ev.cliente ? " · " + ev.cliente : "");
+  li.querySelector("div").textContent = ev.mensagem || "";
+  $("eventos").prepend(li);
+  while ($("eventos").children.length > 100) $("eventos").lastChild.remove();
+}
+
+// ------------------------------------------------------------ alerta: banner, som, vibração, notificação
+let alarme = null;
 let ctx = null;
+
 function tocar(duracao = 0.4) {
   try {
     ctx = ctx || new AudioContext();
@@ -87,74 +288,44 @@ function tocar(duracao = 0.4) {
   } catch {}
 }
 
-const TITULOS = { anomalia: "ANOMALIA DETECTADA, clicker pausado", offline: "CLICKER OFFLINE", teste: "Teste de alerta" };
-
-function alertar(ev) {
-  $("bannerTexto").textContent = TITULOS[ev.tipo] || ev.tipo;
+function alertar(tipo, ev) {
+  $("bannerTexto").textContent = TITULOS[tipo] || tipo;
+  $("bannerDetalhe").textContent = (ev.cliente ? ev.cliente + ": " : "") + (ev.mensagem || "");
   $("banner").style.display = "block";
   if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
   clearInterval(alarme);
   tocar(); alarme = setInterval(tocar, 1500);
   if ("Notification" in window && Notification.permission === "granted") {
-    new Notification("Auto Clicker", { body: ev.mensagem || ev.tipo, tag: "clicker", requireInteraction: true });
+    new Notification("Audio Watch Clicker", { body: $("bannerDetalhe").textContent || TITULOS[tipo], tag: "clicker", requireInteraction: true });
   }
 }
 
-$("ok").onclick = () => { clearInterval(alarme); $("banner").style.display = "none"; };
+function pararAlarme() { clearInterval(alarme); $("banner").style.display = "none"; }
+$("ok").onclick = pararAlarme;
 
-function adicionar(ev) {
-  const li = document.createElement("li");
-  li.className = ev.tipo;
-  const hora = new Date(ev.data).toLocaleTimeString();
-  li.innerHTML = `<strong></strong> <span class="sub"></span><div></div>`;
-  li.querySelector("strong").textContent = ev.tipo;
-  li.querySelector("span").textContent = hora;
-  li.querySelector("div").textContent = ev.mensagem || "";
-  $("eventos").prepend(li);
+function infoNotificacoes() {
+  if (!("Notification" in window)) return $("notifInfo").textContent = "Este navegador não suporta notificações.";
+  if (!window.isSecureContext) return $("notifInfo").textContent = "Notificações exigem HTTPS (ou localhost).";
+  $("notifInfo").textContent = "Permissão de notificação: " + Notification.permission;
 }
 
-function mostrarClicker(s) {
-  const el = $("clicker");
-  if (!s.online) { el.textContent = "Clicker: offline"; el.className = "sub alerta"; return; }
-  el.textContent = "Clicker: online, " + (s.clicando ? "clicando" : "pausado");
-  el.className = "sub " + (s.clicando ? "ok" : "aviso");
-}
-
-function conectar() {
-  const token = $("token").value.trim();
-  if (!token) return;
-  salvar("token", token);
-  if (fonte) fonte.close();
-  $("eventos").innerHTML = "";
-  fonte = new EventSource(`/api/eventos/stream?token=${encodeURIComponent(token)}`);
-
-  fonte.onopen = () => { $("conexao").textContent = "Conectado"; $("conexao").className = "status ok"; };
-  fonte.onerror = () => { $("conexao").textContent = "Reconectando..."; $("conexao").className = "status aviso"; };
-
-  fonte.addEventListener("status", (e) => mostrarClicker(JSON.parse(e.data)));
-  for (const tipo of ["iniciado", "anomalia", "pausado", "retomado", "encerrado", "heartbeat", "online", "offline", "teste"]) {
-    fonte.addEventListener(tipo, (e) => {
-      const ev = JSON.parse(e.data);
-      mostrarClicker({ online: !["offline", "encerrado"].includes(tipo), clicando: ev.clicando });
-      if (tipo === "heartbeat") return;
-      adicionar(ev);
-      // Só alerta eventos novos, não o histórico reenviado na conexão
-      if (ALERTAS.has(tipo) && !ev.replay) alertar(ev);
-    });
-  }
-}
-
-$("conectar").onclick = conectar;
-if ($("token").value) conectar();
+$("permitir").onclick = async () => {
+  if ("Notification" in window) await Notification.requestPermission();
+  tocar(0.2); // desbloqueia o áudio do navegador com um gesto do usuário
+  infoNotificacoes();
+};
 
 $("teste").onclick = async () => {
-  const r = await fetch("/api/eventos", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + $("token").value.trim() },
-    body: JSON.stringify({ tipo: "teste", mensagem: "Evento de teste enviado pelo navegador" }),
+  const r = await api("/api/eventos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tipo: "teste", mensagem: "Evento de teste enviado pelo navegador", cliente: "navegador" }),
   });
   if (!r.ok) $("notifInfo").textContent = "Falha ao enviar teste: HTTP " + r.status;
 };
+
+// ------------------------------------------------------------ início
+if (ler("refreshToken")) renovar().then(abrirPainel, mostrarLogin);
+else mostrarLogin();
 </script>
 </body>
 </html>

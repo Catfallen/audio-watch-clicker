@@ -1,15 +1,40 @@
 # audio-watch-clicker
 
-Auto clicker que monitora o áudio do jogo, **pausa sozinho quando o som sai do padrão** e envia uma **notificação em tempo real para outro dispositivo** (celular, outro PC, navegador). A ideia é você não precisar ouvir nada: o PC pode ficar no mudo e o aviso chega por outro lugar.
+Auto clicker para jogos **tycoon do Roblox** que fica de olho no som do jogo, **pausa sozinho quando o som quebra o padrão** e manda um **aviso em tempo real para outro dispositivo** (celular, outro PC, navegador).
+
+### O problema
+
+Em um tycoon, boa parte do jogo é repetição: clicar, coletar, esperar a produção e clicar de novo. Um auto clicker resolve os cliques, mas cria outro problema: **alguém precisa ficar ouvindo o jogo** para perceber quando algo diferente acontece. Enquanto tudo vai bem, o som é sempre o mesmo ciclo. Quando acontece algo fora do comum, o som muda. Continuar clicando às cegas nessa hora desperdiça cliques, ou pior.
+
+### A solução
+
+Analisando uma gravação real de um tycoon, o som normal apareceu como um **ciclo que se repete**: rajadas curtas de som, sempre separadas por **pausas de silêncio**. Quando o padrão quebra, entra um **som contínuo e tonal**, que dura vários segundos **sem nenhuma pausa**.
 
 ```
- PC do jogo                                   VPS                         Seus dispositivos
-┌──────────────────────────┐   HTTP POST   ┌──────────────────┐   SSE    ┌──────────────────┐
-│ auto_clicker.py          │ ────────────▶ │ server/server.js │ ───────▶ │ navegador / app  │
-│  • clica a cada 0,5 s    │   eventos +   │  (Node + Express)│  tempo   │  banner, alarme, │
-│  • escuta o áudio        │   heartbeat   │                  │   real   │  notificação     │
-│  • pausa na anomalia     │               │                  │          │                  │
-└──────────────────────────┘               └──────────────────┘          └──────────────────┘
+Padrão normal     ▌▌▐  ▌▐▌   ▌▌▐  ▌▐▌   ▌▌▐  ▌▐▌      ← sempre há silêncio entre as rajadas
+Quebra de padrão  ███████████████████████████████      ← som contínuo, nenhum silêncio
+```
+
+O `audio-watch-clicker` vigia exatamente isso. Enquanto ainda existe silêncio a cada poucos segundos, ele continua clicando. Se o som fica contínuo por 3 segundos, ele:
+
+1. **Pausa o clicker** e só volta quando você mandar, pela tecla `l`.
+2. **Avisa você em todos os seus dispositivos**: banner, alarme e notificação no celular ou no navegador.
+
+Assim **você não precisa ouvir nada**. O jogo pode rodar no mudo, você pode estar em outro cômodo, e o aviso chega no celular. Se o PC travar ou a internet cair, o servidor também avisa que o clicker ficou offline.
+
+Um único servidor (VPS) atende **várias pessoas**. Cada uma tem sua conta (login com JWT), e os avisos de um PC chegam **só nos dispositivos do dono**. Uma pessoa pode ter vários PCs rodando o clicker e acompanhar todos no mesmo painel.
+
+> A regra foi calibrada para esse tipo de áudio, com rajadas e pausas no normal e som contínuo na quebra. Para outros jogos ou sons, veja [Funciona para qualquer áudio?](#funciona-para-qualquer-áudio).
+
+```
+ PCs dos jogadores                          VPS (uma só)                    Dispositivos de cada usuário
+┌───────────────────────────┐            ┌──────────────────────┐         ┌───────────────────────────┐
+│ auto_clicker.py (Ana, PC1)│──┐         │ server/ (Express)    │    ┌───▶│ Ana: navegador, celular   │
+│ auto_clicker.py (Ana, PC2)│──┼─ HTTPS ▶│  • login JWT         │─SSE┤    └───────────────────────────┘
+│ auto_clicker.py (Bia)     │──┘  JWT    │  • eventos por conta │    │    ┌───────────────────────────┐
+│  • clica, escuta o áudio  │            │  • SQLite            │    └───▶│ Bia: navegador, celular   │
+│  • pausa na anomalia      │            └──────────────────────┘         └───────────────────────────┘
+└───────────────────────────┘
 ```
 
 ---
@@ -101,7 +126,7 @@ Ela **não** funciona nestes casos:
 
 - **Windows**, por causa da captura de loopback via WASAPI.
 - **Python 3.12 64 bits**. O `requirements.txt` fixa versões testadas nele. Python 32 bits **não funciona** com o librosa.
-- **Node.js 20+** para o servidor (testado no 22).
+- **Node.js 22.13+** para o servidor (usa o SQLite embutido no Node, `node:sqlite`; testado no 22.16).
 
 ---
 
@@ -129,7 +154,7 @@ O `requirements.txt` é um `pip freeze` completo, com todas as dependências fix
 ```bash
 cd server
 npm install
-cp .env.example .env   # e troque o TOKEN
+cp .env.example .env   # e defina o JWT_SECRET
 ```
 
 ---
@@ -155,15 +180,24 @@ cp .env.example .env   # e troque o TOKEN
 
 ### Com notificações
 
-Defina o endereço e o token do servidor antes de rodar:
+Crie sua conta pela página do servidor (`https://seu-dominio`, opção "Cadastre-se"). Na **primeira vez**, informe o endereço do servidor:
 
 ```powershell
 $env:NOTIF_URL = 'https://seu-dominio'
-$env:NOTIF_TOKEN = 'seu-token'
 .\.venv\Scripts\python.exe auto_clicker.py
 ```
 
-Sem essas variáveis o clicker funciona normalmente, só não envia notificações. Os envios acontecem numa thread separada, então se a internet cair o clicker continua clicando.
+O programa pede **e-mail e senha** uma única vez. A sessão fica salva em `%USERPROFILE%\.audio-watch-clicker\sessao.json`, com o endereço do servidor e um refresh token. A senha **não** é salva. Nas próximas vezes basta rodar `auto_clicker.py`, sem `NOTIF_URL` e sem senha.
+
+```powershell
+.\.venv\Scripts\python.exe auto_clicker.py --login    # entrar com outra conta / refazer o login
+.\.venv\Scripts\python.exe auto_clicker.py --logout   # encerrar a sessão (revoga no servidor e apaga o arquivo)
+```
+
+- No painel, cada PC aparece com o **nome do computador**. Para usar outro nome, defina `CLICKER_NOME`.
+- Sem servidor configurado, o clicker funciona normalmente, só não envia notificações.
+- Os envios acontecem numa thread separada: se a internet cair, o clicker continua clicando.
+- O access token (JWT) vale 15 minutos e é renovado sozinho. A sessão salva vale 30 dias e é renovada a cada uso. Se ficar mais de 30 dias sem usar, o programa pede a senha de novo.
 
 ### Calibração
 
@@ -198,8 +232,8 @@ Variáveis de ambiente:
 
 | Variável | Descrição |
 |---|---|
-| `NOTIF_URL` | endereço do servidor, ex.: `https://seu-dominio` |
-| `NOTIF_TOKEN` | o mesmo `TOKEN` configurado no servidor |
+| `NOTIF_URL` | endereço do servidor, ex.: `https://seu-dominio` (só na primeira vez; depois fica salvo) |
+| `CLICKER_NOME` | nome deste PC no painel (padrão: nome do computador) |
 
 > **Volume do Windows:** a regra mede se existe silêncio, não se o som é alto. Aumentar o volume não atrapalha: as pausas continuam silenciosas e a anomalia fica mais alta. Se a captura continua funcionando com o PC **no mudo** depende do driver de áudio. Confirme com `--calibrar` antes de confiar.
 
@@ -233,26 +267,55 @@ Uma característica serve como gatilho quando aparece **`SIM`** na coluna "separ
 
 ## Servidor de notificações
 
-Pasta `server/`. Node com Express, uma única dependência.
+Pasta `server/`. Node com Express e `jsonwebtoken`. O banco é o SQLite embutido no Node, então não há dependência nativa para compilar.
 
-- O clicker envia eventos com **`POST /api/eventos`**.
-- Os dispositivos recebem em tempo real com **SSE** (Server-Sent Events) em `/api/eventos/stream`.
-- A **página de teste** em `/` serve para acompanhar pelo navegador: mostra o status do clicker, a lista de eventos, um banner vermelho, alarme sonoro, vibração (no celular) e notificação nativa.
-- Se o clicker passar **30 s sem enviar sinal de vida**, o servidor publica `offline` (PC travou, caiu a internet ou o programa fechou).
-- Os últimos 50 eventos ficam guardados. Quem reconecta recebe o que perdeu, marcado como `replay` para não tocar o alarme de novo.
-- A cada 15 s o servidor envia um *keepalive* para proxies não derrubarem a conexão SSE.
+- **Contas:** cadastro e login com e-mail e senha. A senha é guardada com hash `scrypt` e sal.
+- **Sessão:** o login devolve um **access token JWT** (15 min) e um **refresh token** (30 dias).
+  - O refresh token é **rotativo**: cada uso gera um novo e invalida o anterior.
+  - No banco fica só o hash dele.
+  - O logout revoga o refresh token.
+- **Isolamento:** o usuário vem do JWT. Um clicker só publica para a conta dele, e cada dispositivo só recebe os eventos da própria conta.
+- **Vários PCs por conta:** cada clicker se identifica pelo nome (`cliente`). O painel mostra o estado de cada um (clicando, pausado ou offline).
+- **Tempo real:** os dispositivos recebem eventos por **SSE** (Server-Sent Events). A autenticação é pelo header `Authorization`, então o token não aparece na URL nem nos logs do nginx.
+- **Offline:** se um clicker passar **30 s sem enviar sinal de vida**, o servidor publica `offline` para aquele PC.
+- **Histórico:** os últimos 200 eventos de cada usuário ficam no banco. Quem reconecta recebe o que perdeu, marcado como `replay` para não tocar o alarme de novo.
+- **Proteção contra força bruta:** login e cadastro aceitam 10 tentativas a cada 15 minutos por IP.
+- **Keepalive:** a cada 15 s o servidor envia um comentário para proxies não derrubarem a conexão SSE.
+
+### Página web
+
+Em `/` fica o painel web:
+- tela de login e cadastro;
+- lista de clickers da conta, com o estado de cada um;
+- lista de eventos;
+- banner vermelho, alarme sonoro, vibração (no celular) e notificação nativa.
+
+O access token fica só em memória. O refresh token fica no `localStorage`, para manter o login entre visitas. O token é renovado sozinho quando vence.
+
+Na página, **"Permitir notificações"** pede permissão de notificação e libera o áudio do navegador. **"Enviar evento de teste"** dispara um alerta de teste.
+
+> Notificações nativas do navegador só funcionam em **HTTPS** (ou `localhost`).
 
 ### Rodando localmente
 
 ```bash
 cd server
-npm run dev          # usa o .env e reinicia ao salvar
-# abra http://localhost:3000, cole o token e clique em Conectar
+cp .env.example .env   # defina o JWT_SECRET
+npm run dev            # usa o .env e reinicia ao salvar
+# abra http://localhost:3000 e crie uma conta
 ```
 
-Na página, **"Permitir notificações"** pede permissão de notificação e libera o áudio do navegador. **"Enviar evento de teste"** dispara um alerta de teste.
+### Variáveis de ambiente (`server/.env`)
 
-> Notificações nativas do navegador só funcionam em **HTTPS** (ou `localhost`).
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `JWT_SECRET` | sim | segredo para assinar os JWT, com pelo menos 32 caracteres |
+| `PORT` | não | porta HTTP (padrão `3000`) |
+| `REGISTRO_ABERTO` | não | `false` desativa novos cadastros (padrão `true`) |
+| `TRUST_PROXY` | não | `1` atrás do nginx, para o limite de tentativas usar o IP real |
+| `DB_PATH` | não | caminho do banco SQLite (padrão `server/dados.db`) |
+
+> Se não quiser que estranhos criem contas no seu servidor, crie as contas necessárias e depois coloque `REGISTRO_ABERTO=false`.
 
 ---
 
@@ -260,13 +323,16 @@ Na página, **"Permitir notificações"** pede permissão de notificação e lib
 
 ### 1. Código e dependências
 
+Requer **Node.js 22.13+**.
+
 ```bash
-git clone <repo> && cd <repo>/server
+git clone https://github.com/Catfallen/audio-watch-clicker.git /opt/audio-watch-clicker
+cd /opt/audio-watch-clicker/server
 npm install --omit=dev
 cp .env.example .env
-# gere um token forte:
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-# e coloque no .env: TOKEN=...
+# gere o segredo dos JWT:
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+# e coloque no .env: JWT_SECRET=...  (e TRUST_PROXY=1 se usar nginx)
 ```
 
 ### 2. Manter rodando (systemd)
@@ -275,12 +341,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ```ini
 [Unit]
-Description=Servidor de notificações do auto clicker
+Description=Servidor de notificações do audio-watch-clicker
 After=network.target
 
 [Service]
 WorkingDirectory=/opt/audio-watch-clicker/server
-ExecStart=/usr/bin/node --env-file=.env server.js
+ExecStart=/usr/bin/node --env-file=.env --disable-warning=ExperimentalWarning server.js
 Restart=always
 User=www-data
 
@@ -289,16 +355,19 @@ WantedBy=multi-user.target
 ```
 
 ```bash
+sudo chown -R www-data /opt/audio-watch-clicker/server   # o banco é criado nessa pasta
 sudo systemctl daemon-reload
 sudo systemctl enable --now clicker-notif
 journalctl -u clicker-notif -f   # logs
 ```
 
-Com pm2 também funciona: `pm2 start "node --env-file=.env server.js" --name clicker-notif`.
+Com pm2 também funciona: `pm2 start npm --name clicker-notif -- start`.
+
+**Backup:** os dados ficam em `dados.db` (contas, sessões e histórico). Para fazer backup, copie esse arquivo com o serviço parado.
 
 ### 3. HTTPS com nginx
 
-HTTPS é **obrigatório** na prática, porque o navegador bloqueia notificações sem ele e o token iria aberto pela rede.
+HTTPS é **obrigatório** na prática. Sem ele, senhas e tokens trafegam abertos pela rede e o navegador bloqueia as notificações.
 
 ```nginx
 server {
@@ -309,6 +378,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
         # SSE: sem buffer e com timeout longo
         proxy_buffering off;
@@ -326,42 +396,69 @@ sudo certbot --nginx -d seu-dominio
 
 ## API
 
-Todas as rotas exigem o token, de uma destas formas:
+Rotas fora de `/api/auth` exigem `Authorization: Bearer <accessToken>`. Erros respondem `{ "erro": "mensagem" }`.
 
-- Header `Authorization: Bearer <TOKEN>`.
-- Query `?token=<TOKEN>`. Necessário no SSE, porque o `EventSource` do navegador não envia headers.
+### Autenticação
+
+| Rota | Corpo | Resposta |
+|---|---|---|
+| `POST /api/auth/registrar` | `{ email, senha, dispositivo? }` | `201` tokens · `400` dados inválidos · `409` e-mail já cadastrado · `403` registro fechado |
+| `POST /api/auth/login` | `{ email, senha, dispositivo? }` | `200` tokens · `401` e-mail ou senha incorretos |
+| `POST /api/auth/refresh` | `{ refreshToken }` | `200` tokens novos (o refresh antigo deixa de valer) · `401` sessão expirada |
+| `POST /api/auth/logout` | `{ refreshToken }` | `204` |
+| `GET /api/me` | — | `{ id, email, criadoEm }` |
+
+Login e cadastro respondem `429` depois de 10 tentativas em 15 minutos pelo mesmo IP.
+
+Resposta com tokens:
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+  "refreshToken": "kq3V0n...",
+  "expiraEm": 900,
+  "usuario": { "id": 1, "email": "ana@exemplo.com" }
+}
+```
+
+`dispositivo` é só um rótulo da sessão, por exemplo `"web: Chrome"`, `"clicker: PC-SALA"` ou `"mobile: Android"`.
 
 ### `POST /api/eventos`
 
 Enviado pelo clicker.
 
 ```json
-{ "tipo": "anomalia", "mensagem": "Som fora do padrão às 14:03:22. Clicker pausado.", "clicando": false }
+{ "tipo": "anomalia", "mensagem": "Som fora do padrão às 14:03:22. Clicker pausado.", "clicando": false, "cliente": "PC-SALA" }
 ```
 
 | Resposta | Quando |
 |---|---|
-| `201` | evento publicado (retorna o evento com `id` e `data`) |
-| `400` | tipo inválido |
-| `401` | token ausente ou errado |
+| `201` | evento publicado para os dispositivos do usuário (retorna o evento com `id` e `data`) |
+| `400` | tipo inválido (o cliente não pode enviar `online` nem `offline`) |
+| `401` | token ausente, inválido ou expirado |
 
 ### `GET /api/eventos/stream`
 
-Stream SSE para os dispositivos. Cada mensagem tem `event: <tipo>` e `data: <json>`:
+Stream SSE com os eventos **da conta do token**. Cada mensagem tem `event: <tipo>` e `data: <json>`:
 
 ```
 id: 7
 event: anomalia
-data: {"id":7,"tipo":"anomalia","mensagem":"...","data":"2026-10-06T14:03:22.000Z","clicando":false}
+data: {"id":7,"tipo":"anomalia","mensagem":"...","cliente":"PC-SALA","clicando":false,"data":"2026-10-06T14:03:22.000Z"}
 ```
 
-- Ao conectar, recebe o histórico perdido (com `"replay": true`) e um evento `status` com o estado atual.
-- Para retomar de onde parou, use o header `Last-Event-ID` (o `EventSource` envia automaticamente ao reconectar) ou `?desde=<id>`.
+- Na conexão, recebe os eventos recentes (ou o que perdeu, se enviar `Last-Event-ID`), marcados com `"replay": true`. Em seguida recebe um evento `status`, com o estado de cada clicker: `{ "clickers": [{ "cliente", "online", "clicando", "ultimoContato" }] }`.
+- O `EventSource` nativo do navegador não envia headers. Por isso a página web lê o stream com `fetch`. No app mobile, use uma biblioteca SSE que aceite headers (ex.: `react-native-sse`).
+- O access token só é verificado na conexão. Ao reconectar depois de 15 min, renove o token antes.
 
 ### `GET /api/status`
 
 ```json
-{ "online": true, "clicando": true, "ultimoContato": 1791271974741, "dispositivos": 1, "historico": [] }
+{
+  "clickers": [{ "cliente": "PC-SALA", "online": true, "clicando": true, "ultimoContato": 1791271974741 }],
+  "dispositivos": 2,
+  "historico": []
+}
 ```
 
 ### Tipos de evento
@@ -374,9 +471,9 @@ data: {"id":7,"tipo":"anomalia","mensagem":"...","data":"2026-10-06T14:03:22.000
 | `retomado` | retomado pela tecla `l` | não |
 | `encerrado` | programa fechado com `esc` | não |
 | `heartbeat` | sinal de vida a cada 10 s (não vai para o histórico) | não |
-| `online` | servidor voltou a receber sinal de vida | não |
-| `offline` | 30 s sem sinal de vida | **sim** |
-| `teste` | botão de teste da página | **sim** |
+| `online` | servidor (clicker voltou a dar sinal de vida) | não |
+| `offline` | servidor (30 s sem sinal de vida daquele PC) | **sim** |
+| `teste` | botão de teste da página (não conta como clicker) | **sim** |
 
 ---
 
@@ -388,8 +485,11 @@ data: {"id":7,"tipo":"anomalia","mensagem":"...","data":"2026-10-06T14:03:22.000
 - **Captura com o PC no mudo** depende do driver. Teste com `--calibrar`.
 - **O `l` é digitado no jogo** ao pausar ou retomar.
 - **Jogos rodando como administrador** podem ignorar cliques e teclas do script. Nesse caso, rode o script como administrador também.
-- **O servidor guarda tudo em memória**: reiniciar apaga o histórico, o que não afeta o funcionamento.
-- **Um token só**: qualquer pessoa com o token pode enviar e receber eventos.
+- **Sem push nativo no celular (ainda):** o SSE só recebe com o navegador ou o app abertos. Com o celular bloqueado ou o app em segundo plano, o aviso só chega quando ele voltar. O caminho para isso é Web Push (navegador) ou FCM/APNs (app).
+- **Estado online/offline em memória:** ao reiniciar o servidor, os clickers aparecem offline até o próximo sinal de vida (até 10 s). Contas e histórico ficam no banco.
+- **Sem recuperação de senha nem verificação de e-mail.** Para trocar uma senha esquecida, é preciso editar o banco.
+- **Refresh token em disco:** o `sessao.json` do PC dá acesso à conta por até 30 dias. Use `--logout` em PCs compartilhados.
+- **Uma única instância do servidor:** as conexões SSE ficam na memória do processo. Para rodar várias instâncias seria preciso um barramento (ex.: Redis pub/sub).
 
 ---
 
@@ -403,7 +503,12 @@ data: {"id":7,"tipo":"anomalia","mensagem":"...","data":"2026-10-06T14:03:22.000
 | Calibração mostra sempre `-200 dB` | nada tocando, ou dispositivo de saída errado | toque algum som e confirme o dispositivo em "Capturando áudio de:" |
 | Pausa sozinho logo no início | outro som tocando, ou jogo com som contínuo | feche outros sons ou reanalise com `analisar_audio.py` |
 | Nunca detecta a anomalia | captura baixa demais, ou anomalia com pausas | rode `--calibrar` e ajuste `LIMIAR_DB` |
-| `Falha ao notificar o servidor` | URL, token ou HTTPS errados | teste com `curl` no `/api/status` |
+| `Falha ao notificar o servidor` | servidor fora do ar, URL errada ou HTTPS inválido | abra a URL no navegador; confira com `--login` |
+| `Sessão expirada. Rode com --login` | refresh token vencido (30 dias), revogado ou banco do servidor recriado | `auto_clicker.py --login` |
+| `muitas tentativas, tente mais tarde` (429) | 10 tentativas de login/cadastro em 15 min | espere o tempo indicado; atrás do nginx, configure `TRUST_PROXY=1` |
+| Servidor encerra com `Defina JWT_SECRET...` | `.env` sem `JWT_SECRET` ou com menos de 32 caracteres | gere um com o comando do [Deploy](#1-código-e-dependências) |
+| `No such built-in module: node:sqlite` | Node antigo | atualize para Node 22.13+ |
+| Todos deslogados depois de trocar o `JWT_SECRET` | access tokens antigos ficam inválidos | normal: eles renovam pelo refresh token na próxima requisição |
 | Página fica em "Reconectando..." atrás do nginx | buffer do proxy ligado | `proxy_buffering off;` (veja [Deploy](#3-https-com-nginx)) |
 | Notificação nativa não aparece | sem HTTPS ou sem permissão | use HTTPS e clique em "Permitir notificações" |
 
@@ -413,14 +518,16 @@ data: {"id":7,"tipo":"anomalia","mensagem":"...","data":"2026-10-06T14:03:22.000
 
 ```
 .
-├── auto_clicker.py        # clicker + detector de áudio + envio de eventos
+├── auto_clicker.py        # clicker + detector de áudio + login + envio de eventos
 ├── analisar_audio.py      # análise de uma gravação (tabela + gráficos)
 ├── requirements.txt
 ├── audio.mp3              # gravação de referência (normal + anomalia no final)
 └── server/
-    ├── server.js          # API + SSE
+    ├── server.js          # rotas: auth, eventos, SSE por usuário
+    ├── auth.js            # senha (scrypt), JWT, refresh token rotativo, limite de tentativas
+    ├── db.js              # SQLite (usuários, sessões, eventos)
     ├── package.json
     ├── .env.example
     └── public/
-        └── index.html     # página de monitoramento e teste
+        └── index.html     # painel web: login, clickers, eventos, alertas
 ```

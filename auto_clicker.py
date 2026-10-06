@@ -12,17 +12,24 @@ Parada por áudio: o padrão normal sempre tem pausas de silêncio. Se nos últi
 JANELA_AUDIO segundos o som nunca ficar abaixo de LIMIAR_DB, o clicker pausa.
 Ele só volta a clicar quando você apertar a tecla.
 
-Notificações: defina NOTIF_URL (ex.: https://seu-servidor.com) e NOTIF_TOKEN
-como variáveis de ambiente para enviar os eventos ao servidor (pasta server/).
+Notificações: defina NOTIF_URL (ex.: https://seu-servidor.com) e o programa pede
+e-mail e senha na primeira vez. A sessão fica salva em ~/.audio-watch-clicker/,
+então nas próximas vezes não pede de novo (nem precisa do NOTIF_URL).
+  python auto_clicker.py --login    # entra com outra conta / refaz o login
+  python auto_clicker.py --logout   # encerra a sessão salva
 """
 import collections
+import getpass
 import json
 import os
 import queue
+import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
+from pathlib import Path
 
 import numpy as np
 import pyaudiowpatch as pyaudio
@@ -38,7 +45,8 @@ LIMIAR_DB = -60.0      # abaixo disso conta como silêncio (dBFS)
 BLOCO = 2048           # amostras por leitura de áudio (~45 ms)
 
 NOTIF_URL = os.environ.get("NOTIF_URL", "").rstrip("/")
-NOTIF_TOKEN = os.environ.get("NOTIF_TOKEN", "")
+CLIENTE = os.environ.get("CLICKER_NOME") or socket.gethostname()  # nome deste PC no painel
+ARQUIVO_SESSAO = Path.home() / ".audio-watch-clicker" / "sessao.json"
 HEARTBEAT = 10         # segundos entre sinais de "estou vivo" para o servidor
 
 mouse = Controller()
@@ -46,32 +54,150 @@ clicando = threading.Event()
 sair = threading.Event()
 
 
+class ErroSessao(Exception):
+    pass
+
+
+class Sessao:
+    """Login no servidor: guarda o refresh token em disco e renova o access token (JWT)."""
+
+    def __init__(self, url):
+        self.url = url
+        self.access = None
+        self.expira = 0.0
+        self.refresh = None
+        self.email = None
+        self.trava = threading.Lock()
+        try:
+            salvo = json.loads(ARQUIVO_SESSAO.read_text(encoding="utf-8"))
+            if salvo.get("url") == url:
+                self.refresh, self.email = salvo.get("refreshToken"), salvo.get("email")
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def url_salva():
+        try:
+            return json.loads(ARQUIVO_SESSAO.read_text(encoding="utf-8")).get("url", "")
+        except (OSError, ValueError):
+            return ""
+
+    def _http(self, metodo, caminho, corpo=None, token=None):
+        """Faz a requisição e devolve (status, json). Erros de rede sobem como exceção."""
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        dados = json.dumps(corpo).encode() if corpo is not None else None
+        req = urllib.request.Request(self.url + caminho, data=dados, headers=headers, method=metodo)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                texto = r.read().decode() or "{}"
+                return r.status, json.loads(texto)
+        except urllib.error.HTTPError as erro:
+            try:
+                return erro.code, json.loads(erro.read().decode() or "{}")
+            except ValueError:
+                return erro.code, {}
+
+    def _aplicar(self, tokens):
+        self.access = tokens["accessToken"]
+        self.expira = time.monotonic() + tokens["expiraEm"] - 60  # renova 1 min antes
+        self.refresh = tokens["refreshToken"]
+        self.email = tokens["usuario"]["email"]
+        ARQUIVO_SESSAO.parent.mkdir(parents=True, exist_ok=True)
+        ARQUIVO_SESSAO.write_text(
+            json.dumps({"url": self.url, "email": self.email, "refreshToken": self.refresh}),
+            encoding="utf-8",
+        )
+
+    def login(self, email, senha):
+        status, corpo = self._http("POST", "/api/auth/login",
+                                   {"email": email, "senha": senha, "dispositivo": f"clicker: {CLIENTE}"})
+        if status != 200:
+            raise ErroSessao(corpo.get("erro", f"HTTP {status}"))
+        self._aplicar(corpo)
+
+    def renovar(self):
+        if not self.refresh:
+            raise ErroSessao("sem sessão salva")
+        status, corpo = self._http("POST", "/api/auth/refresh", {"refreshToken": self.refresh})
+        if status != 200:
+            self.refresh = None
+            ARQUIVO_SESSAO.unlink(missing_ok=True)
+            raise ErroSessao(corpo.get("erro", f"HTTP {status}"))
+        self._aplicar(corpo)
+
+    def requisicao(self, metodo, caminho, corpo=None):
+        """Requisição autenticada: renova o token quando vence ou quando recebe 401."""
+        with self.trava:
+            if not self.access or time.monotonic() > self.expira:
+                self.renovar()
+            status, resposta = self._http(metodo, caminho, corpo, self.access)
+            if status == 401:
+                self.renovar()
+                status, resposta = self._http(metodo, caminho, corpo, self.access)
+            return status, resposta
+
+    def logout(self):
+        if self.refresh:
+            try:
+                self._http("POST", "/api/auth/logout", {"refreshToken": self.refresh})
+            except OSError:
+                pass
+        ARQUIVO_SESSAO.unlink(missing_ok=True)
+
+
+def entrar(url, forcar=False):
+    """Restaura a sessão salva ou pede e-mail e senha. Retorna a Sessao autenticada."""
+    sessao = Sessao(url)
+    if sessao.refresh and not forcar:
+        try:
+            sessao.renovar()
+            print(f"Sessão restaurada: {sessao.email} em {url}")
+            return sessao
+        except ErroSessao as erro:
+            print(f"Sessão salva não vale mais ({erro}). Faça login novamente.")
+        except OSError as erro:
+            raise SystemExit(f"Não foi possível conectar a {url}: {erro}")
+
+    print(f"Login em {url}")
+    for _ in range(3):
+        email = input("E-mail: ").strip()
+        senha = getpass.getpass("Senha: ")
+        try:
+            sessao.login(email, senha)
+            print(f"Logado como {sessao.email}. A sessão fica salva para as próximas vezes.")
+            return sessao
+        except ErroSessao as erro:
+            print(f"Falha no login: {erro}")
+        except OSError as erro:
+            raise SystemExit(f"Não foi possível conectar a {url}: {erro}")
+    raise SystemExit("Não foi possível entrar. Encerrando.")
+
+
 class Notificador:
     """Envia eventos ao servidor numa thread separada para não travar o clicker."""
 
-    def __init__(self):
-        self.ativo = bool(NOTIF_URL and NOTIF_TOKEN)
+    def __init__(self, sessao=None):
+        self.sessao = sessao
+        self.ativo = sessao is not None
         self.fila = queue.Queue()
         self.falhando = False
         if self.ativo:
             threading.Thread(target=self._enviar_fila, daemon=True).start()
             threading.Thread(target=self._heartbeat, daemon=True).start()
-            print(f"Notificações ativas: {NOTIF_URL}")
+            print(f"Notificações ativas para {sessao.email} (este PC aparece como '{CLIENTE}').")
         else:
-            print("Notificações desligadas (defina NOTIF_URL e NOTIF_TOKEN).")
+            print("Notificações desligadas (defina NOTIF_URL para usar o servidor).")
 
     def enviar(self, tipo, mensagem=""):
         if self.ativo:
-            self.fila.put({"tipo": tipo, "mensagem": mensagem, "clicando": clicando.is_set()})
+            self.fila.put({"tipo": tipo, "mensagem": mensagem, "clicando": clicando.is_set(), "cliente": CLIENTE})
 
     def _post(self, evento):
-        req = urllib.request.Request(
-            f"{NOTIF_URL}/api/eventos",
-            data=json.dumps(evento).encode(),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {NOTIF_TOKEN}"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=10).close()
+        status, corpo = self.sessao.requisicao("POST", "/api/eventos", evento)
+        if status != 201:
+            raise RuntimeError(corpo.get("erro", f"HTTP {status}"))
 
     def _enviar_fila(self):
         while True:
@@ -82,6 +208,11 @@ class Notificador:
                     if self.falhando:
                         print("Conexão com o servidor de notificações restabelecida.")
                     self.falhando = False
+                    break
+                except ErroSessao as erro:
+                    if not self.falhando:
+                        print(f"Sessão expirada ({erro}). Rode com --login para entrar de novo.")
+                    self.falhando = True
                     break
                 except Exception as erro:
                     if not self.falhando:
@@ -208,7 +339,18 @@ def calibrar(monitor, notif):
 
 
 def main():
-    notif = Notificador()
+    url = NOTIF_URL or Sessao.url_salva()
+
+    if "--logout" in sys.argv:
+        if url:
+            Sessao(url).logout()
+        print("Sessão encerrada.")
+        return
+
+    if "--login" in sys.argv and not url:
+        raise SystemExit("Defina NOTIF_URL com o endereço do servidor para fazer login.")
+
+    notif = Notificador(entrar(url, forcar="--login" in sys.argv) if url else None)
     monitor = MonitorAudio()
     threading.Thread(target=monitor.capturar, daemon=True).start()
 
