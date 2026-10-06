@@ -321,76 +321,25 @@ npm run dev            # usa o .env e reinicia ao salvar
 
 ## Deploy na VPS
 
-### 1. Código e dependências
+Passo a passo em **[docs/VPS.md](docs/VPS.md)**, para uma VPS que já tem nginx, certbot e pm2. O servidor roda na porta interna **3367** com pm2, e o nginx faz o HTTPS na frente.
 
-Requer **Node.js 22.13+**.
-
-```bash
-git clone https://github.com/Catfallen/audio-watch-clicker.git /opt/audio-watch-clicker
-cd /opt/audio-watch-clicker/server
-npm install --omit=dev
-cp .env.example .env
-# gere o segredo dos JWT:
-node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-# e coloque no .env: JWT_SECRET=...  (e TRUST_PROXY=1 se usar nginx)
-```
-
-### 2. Manter rodando (systemd)
-
-`/etc/systemd/system/clicker-notif.service`:
-
-```ini
-[Unit]
-Description=Servidor de notificações do audio-watch-clicker
-After=network.target
-
-[Service]
-WorkingDirectory=/opt/audio-watch-clicker/server
-ExecStart=/usr/bin/node --env-file=.env --disable-warning=ExperimentalWarning server.js
-Restart=always
-User=www-data
-
-[Install]
-WantedBy=multi-user.target
-```
+Resumo:
 
 ```bash
-sudo chown -R www-data /opt/audio-watch-clicker/server   # o banco é criado nessa pasta
-sudo systemctl daemon-reload
-sudo systemctl enable --now clicker-notif
-journalctl -u clicker-notif -f   # logs
+git clone https://github.com/Catfallen/audio-watch-clicker.git ~/audio-watch-clicker
+cd ~/audio-watch-clicker/server && npm ci --omit=dev
+cp .env.example .env && nano .env      # JWT_SECRET, PORT=3367, TRUST_PROXY=1
+pm2 start server.js --name audio-watch-clicker --node-args="--env-file=.env --disable-warning=ExperimentalWarning"
+pm2 save
+# nginx: server block com proxy_pass http://127.0.0.1:3367 + certbot --nginx -d seu-dominio
 ```
 
-Com pm2 também funciona: `pm2 start npm --name clicker-notif -- start`.
+Pontos que mais causam problema:
 
-**Backup:** os dados ficam em `dados.db` (contas, sessões e histórico). Para fazer backup, copie esse arquivo com o serviço parado.
-
-### 3. HTTPS com nginx
-
-HTTPS é **obrigatório** na prática. Sem ele, senhas e tokens trafegam abertos pela rede e o navegador bloqueia as notificações.
-
-```nginx
-server {
-    server_name seu-dominio;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-        # SSE: sem buffer e com timeout longo
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 1h;
-    }
-}
-```
-
-```bash
-sudo certbot --nginx -d seu-dominio
-```
+- **HTTPS é obrigatório**: senhas trafegam no login e o navegador bloqueia notificações sem ele.
+- **nginx precisa de `proxy_buffering off`** e `proxy_read_timeout` longo, senão os avisos atrasam.
+- **`TRUST_PROXY=1`** atrás do nginx, senão o limite de tentativas de login bloqueia todo mundo junto.
+- **`REGISTRO_ABERTO=false`** depois de criar as contas.
 
 ---
 
@@ -506,10 +455,10 @@ data: {"id":7,"tipo":"anomalia","mensagem":"...","cliente":"PC-SALA","clicando":
 | `Falha ao notificar o servidor` | servidor fora do ar, URL errada ou HTTPS inválido | abra a URL no navegador; confira com `--login` |
 | `Sessão expirada. Rode com --login` | refresh token vencido (30 dias), revogado ou banco do servidor recriado | `auto_clicker.py --login` |
 | `muitas tentativas, tente mais tarde` (429) | 10 tentativas de login/cadastro em 15 min | espere o tempo indicado; atrás do nginx, configure `TRUST_PROXY=1` |
-| Servidor encerra com `Defina JWT_SECRET...` | `.env` sem `JWT_SECRET` ou com menos de 32 caracteres | gere um com o comando do [Deploy](#1-código-e-dependências) |
+| Servidor encerra com `Defina JWT_SECRET...` | `.env` sem `JWT_SECRET` ou com menos de 32 caracteres | gere um com o comando do [Deploy](docs/VPS.md#6-configurar-o-env) |
 | `No such built-in module: node:sqlite` | Node antigo | atualize para Node 22.13+ |
 | Todos deslogados depois de trocar o `JWT_SECRET` | access tokens antigos ficam inválidos | normal: eles renovam pelo refresh token na próxima requisição |
-| Página fica em "Reconectando..." atrás do nginx | buffer do proxy ligado | `proxy_buffering off;` (veja [Deploy](#3-https-com-nginx)) |
+| Página fica em "Reconectando..." atrás do nginx | buffer do proxy ligado | `proxy_buffering off;` (veja [docs/VPS.md](docs/VPS.md#9-nginx-e-https)) |
 | Notificação nativa não aparece | sem HTTPS ou sem permissão | use HTTPS e clique em "Permitir notificações" |
 
 ---
@@ -522,6 +471,8 @@ data: {"id":7,"tipo":"anomalia","mensagem":"...","cliente":"PC-SALA","clicando":
 ├── analisar_audio.py      # análise de uma gravação (tabela + gráficos)
 ├── requirements.txt
 ├── audio.mp3              # gravação de referência (normal + anomalia no final)
+├── docs/
+│   └── VPS.md             # guia de instalação na VPS
 └── server/
     ├── server.js          # rotas: auth, eventos, SSE por usuário
     ├── auth.js            # senha (scrypt), JWT, refresh token rotativo, limite de tentativas
